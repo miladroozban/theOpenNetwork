@@ -4,114 +4,112 @@ import pandas as pd
 import time
 import os
 
-#handle root data
-dataset_name = "dataset.csv"
-script_path = os.path.dirname(os.path.abspath(__file__))
-project_path = os.path.dirname(os.path.abspath(__file__))
-dataset_path = os.path.join(project_path,'dataset', dataset_name)
+class FetchData:
+    def __init__(self,exchange,symbols,timeframe,since_date,candles_limit,sleep_time,daily_candles_limit,rate,columns):
 
-# defining settings
-exchange = ccxt.kucoin()
-symbols = ['TON/USDT','BTC/USDT','ETH/USDT']
-timeframe = '1m'
-since_date = 1666902600000
-candles_limit = 1440
-sleep_time = 1
-columns = ["timestamp", "open", "high", "low", "close", "volume"]
-daily_candles_limit = 10  # number of candles from 27 oct 2022 to 2 feb 2022 equals : 829
+        self.exchange = exchange
+        self.symbol = symbols
+        self.timeframe = timeframe
+        self.since = since_date
+        self.limit = candles_limit
+        self.sleep_time = sleep_time
+        self.iteration = daily_candles_limit
+        self.rate = rate
+        self.columns = columns
 
-
-
-
-def volume_correction (symbol_dataframe):
-    symbol_dataframe = symbol_dataframe["volume"].tolist()
-    for i in range(len(symbol_dataframe)):
-        symbol_dataframe[i] = str(symbol_dataframe[i]).replace('.', '')
-    return symbol_dataframe
-def fetch_candle_data(symbol, timeframe_data, since, limit, daily_candles):
-    candle_data = []
-    try:
-        for x in range(daily_candles):
-            data = exchange.fetch_ohlcv(symbol, timeframe_data, since=since, limit=limit)
-            candle_data.extend(data)
-            print(f" {len(candle_data)} candles data from {daily_candles * candles_limit} in {symbol} market fetched")
-            since += (candles_limit * 60000)  # converting minutes to milliseconds / formula : minutes * 60000
-            time.sleep(sleep_time)
-
-    except ccxt.NetworkError as e:
-        print(f"Network error for {symbol} : ", e)
-        raise
-    except ccxt.ExchangeError as e:
-        print(f"Exchange error for {symbol} : ", e)
-        raise
-    return candle_data
-def save_to_csv(data, path, symbol):
-    try:
-        data.to_csv(path, index=False)
-    except OSError as e:
-        print(f"{e} , if you've opened {path}, please close and try again")
-        raise
-def dataset_creator():
-    dataset = None
-
-    for symbol in symbols:
-        print(f"Fetching data for {symbol}...")
-        candle_data = fetch_candle_data(symbol, timeframe, since_date, candles_limit, daily_candles_limit)
-        df = pd.DataFrame(candle_data, columns=["timestamp", "open", "high", "low", "close", "volume"])
-
-        if "timeframe" in df.columns:
-            df["timeframe"] = timeframe
-        else:
-            df.insert(1, "timeframe", timeframe)
+    def run(self):
+        self.fetch()
+        project_path = os.path.dirname(os.path.abspath(__file__))
+        dataset_dir = os.path.join(project_path, 'dataset')
+        output_path = os.path.join(dataset_dir, 'merged_dataset.csv')
+        csv_files = [f for f in os.listdir(dataset_dir) if f.endswith('.csv')]
 
 
+        # Merge data
+        first_csv = None
+        for file in csv_files:
+            print(f"{file} merging started.")
+            file_path = os.path.join(dataset_dir, file)
 
-        if dataset is None:
-            dataset = df.rename(columns={
-                "open": f"{symbol.split('/')[0].lower()}_open",
-                "high": f"{symbol.split('/')[0].lower()}_high",
-                "low": f"{symbol.split('/')[0].lower()}_low",
-                "close": f"{symbol.split('/')[0].lower()}_close",
-                "volume": f"{symbol.split('/')[0].lower()}_volume"
-            })
+            df = pd.read_csv(file_path)
+            if first_csv is None:
+                first_csv = 1
+                df.to_csv(output_path,index=False)
+                print(f"{file} merged successfully.")
+            else :
+                rest_csvs = pd.read_csv(output_path)
+                df.drop(["timestamp","timeframe"],axis=1,inplace=True)
+                concat = pd.concat([rest_csvs, df] , axis=1)
+                concat.to_csv(output_path,index=False)
+                print(f"{file} merged successfully.")
+    def fetch(self):
+        project_path = os.path.dirname(os.path.abspath(__file__))
+        for symbol in self.symbol:
+            base_currency = symbol.split('/')[0].lower()
+            dataset_name = f"{base_currency}_dataset.csv"
+            dataset_path = os.path.join(project_path, 'dataset', dataset_name)
+        #--------------------------------------------------------------------------------------------------------------
+
+            for tf in self.timeframe:
+                self.since = 1666902600000
+                r = self.rate[self.timeframe.index(tf)]           # rate
+                i = self.iteration[self.timeframe.index(tf)]      #iteration
+
+                try:
+                    for x in range (i):
+                        fetched = self.exchange.fetch_ohlcv(symbol, timeframe=tf, since=self.since, limit=self.limit)
+
+                        print(f"{len(fetched)} candles data from {i * self.limit} in {symbol} market fetched")
+                        df = pd.DataFrame(fetched, columns=self.columns)
+
+                        if "timeframe" in df.columns:
+                                df["timeframe"] = tf
+                        else:
+                                df.insert(1, "timeframe", tf)
+
+                        dataset = df.rename(columns={
+                            col: f"{base_currency}_{col}"
+                            if col != "timestamp" else col
+                            for col in self.columns
+                        })
 
 
-            save_to_csv(dataset, dataset_path, symbol)
-            print(f"{symbol} has been saved to {dataset_name}")
-        else:
+                        header = not os.path.exists(dataset_path)
+                        dataset.to_csv(dataset_path, mode='a', index=False , header=header)
+                        print("dataset saved")
 
-            for col in ["open", "high", "low", "close", "volume"]:
+                    #-------------------------------------------------------------------------------------------------
 
-                dataset[f"{symbol.split('/')[0].lower()}_{col}"] = df[col]
-                save_to_csv(dataset, dataset_path, symbol)
-        print(f"{symbol} has been saved to {dataset_name}")
-    return print("ALL data has been saved")
-def arrange_dataset():
-    try:
-        with open(dataset_path, 'r') as f:
-            dataset = pd.read_csv(f)
-            # dataset.set_index('timestamp', inplace=True)
-            new_order = [
-                'timestamp', 'timeframe',
-                'ton_open', 'btc_open', 'eth_open',
-                'ton_high', 'btc_high', 'eth_high',
-                'ton_low', 'btc_low', 'eth_low',
-                'ton_close', 'btc_close', 'eth_close',
-                'ton_volume', 'btc_volume', 'eth_volume']
-            dataset = dataset[new_order]
-            dataset.to_csv(dataset_path, index=False)
-        print("dataset has been arranged")
-    except FileNotFoundError as e:
-        print(e)
-        raise
-
-    except OSError as e:
-        print(f"{e} , if you've opened dataset file, please close and try again")
-        raise
+                        self.since += (self.limit * 60000 * r)  # converting minutes to milliseconds / formula : minutes * 60000
+                        time.sleep(self.sleep_time)
 
 
-dataset_creator()
-arrange_dataset()
+                except (ccxt.NetworkError, ccxt.ExchangeError) as e:
+                    print(f"Error fetching {symbol} ({tf}): {e}")
+                    raise
+
+
+        return print ("data has been fetched and saved")
+
+fetching_data = FetchData(
+                exchange = ccxt.kucoin(),
+                symbols = ['TON/USDT','BTC/USDT','ETH/USDT'],
+                timeframe = ['1m','5m'],
+                since_date = 1666902600000,
+                candles_limit = 1440,
+                sleep_time = 2,
+                daily_candles_limit = [10,5], # number of candles from 27 oct 2022 to 2 feb 2022 equals : 829
+                rate = [1,5],
+                columns = ["timestamp", "open", "high", "low", "close", "volume"])
+fetching_data.run()
+
+
+
+
+
+
+
+
 
 
 
